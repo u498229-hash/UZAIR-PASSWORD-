@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 import pyzipper
-import pikepdf
 import msoffcrypto
 import io
 import subprocess
@@ -22,7 +21,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Bot Configuration
-BOT_TOKEN = "8956796504:AAH0Hqma5XYvKAaORmcf6nJGCWUQ8QAFdEo"
+import os
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # Global variables for rate limiting
 user_queues = {}
@@ -195,22 +195,26 @@ def crack_rar_thread(file_path, wordlist_path, user_id):
         log_attempt(user_id, "RAR", False)
         return f"❌ Error: {str(e)}"
 
-def crack_pdf_thread(file_path, wordlist_path, user_id):
+def crack_docx_thread(file_path, wordlist_path, user_id):
     try:
         for pwd in open(wordlist_path, "r", errors="ignore"):
             password = pwd.strip()
             if not password:
                 continue
             try:
-                with pikepdf.open(file_path, password=password) as pdf:
-                    log_attempt(user_id, "PDF", True)
-                    return f"🎉 PASSWORD FOUND: `{password}`"
-            except:
+                with open(file_path, 'rb') as f:
+                    file_data = f.read()
+                decrypted = msoffcrypto.OfficeFile(io.BytesIO(file_data))
+                decrypted.load_key(password=password)
+                # If we get here, password is correct
+                log_attempt(user_id, "DOCX", True)
+                return f"🎉 PASSWORD FOUND: `{password}`"
+            except Exception as e:
                 continue
-        log_attempt(user_id, "PDF", False)
+        log_attempt(user_id, "DOCX", False)
         return "❌ Password not found in wordlist"
     except Exception as e:
-        log_attempt(user_id, "PDF", False)
+        log_attempt(user_id, "DOCX", False)
         return f"❌ Error: {str(e)}"
 
 # Async function to run cracking in thread pool
@@ -230,8 +234,8 @@ async def run_cracking_async(file_path, wordlist_path, user_id, file_type):
             result = await loop.run_in_executor(thread_pool, crack_zip_thread, file_path, wordlist_path, user_id)
         elif file_type == 'RAR':
             result = await loop.run_in_executor(thread_pool, crack_rar_thread, file_path, wordlist_path, user_id)
-        elif file_type == 'PDF':
-            result = await loop.run_in_executor(thread_pool, crack_pdf_thread, file_path, wordlist_path, user_id)
+        elif file_type == 'DOCX':
+            result = await loop.run_in_executor(thread_pool, crack_docx_thread, file_path, wordlist_path, user_id)
         else:
             result = "⚠️ File type supported but cracking not implemented"
         
@@ -254,7 +258,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🪄 UPLOAD ANY FILE AND SEE MAGIC!
 
 📁 *SUPPORTED FILES:*
-• ZIP • RAR • PDF • DOCX
+• ZIP • RAR • DOCX
 
 🚀 *HIGH-PERFORMANCE BOT*
 • Multi-user support ✅
@@ -281,7 +285,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📁 *SUPPORTED FORMATS:*
 • ZIP Archives
 • RAR Archives  
-• PDF Documents
 • DOCX Documents
 
 🚀 *PERFORMANCE FEATURES:*
@@ -335,14 +338,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     supported_types = {
         '.zip': 'ZIP', 
         '.rar': 'RAR', 
-        '.pdf': 'PDF', 
         '.docx': 'DOCX'
     }
     
     file_extension = os.path.splitext(document.file_name)[1].lower()
     
     if file_extension not in supported_types:
-        await update.message.reply_text("❌ Unsupported file type! Use ZIP, RAR, PDF, DOCX")
+        await update.message.reply_text("❌ Unsupported file type! Use ZIP, RAR, DOCX")
         return
     
     # Check if server is busy
@@ -412,7 +414,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             "📤 *READY FOR UPLOAD*\n\n"
             "Please upload your protected file now!\n"
-            "Supported: ZIP, RAR, PDF, DOCX\n\n"
+            "Supported: ZIP, RAR, DOCX\n\n"
             "🚀 *High-speed processing activated*",
             parse_mode='Markdown'
         )
@@ -439,7 +441,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🆘 *HELP - OPTIMIZED FOR HIGH TRAFFIC*
 
 📁 *SUPPORTED FILES:*
-• ZIP, RAR, PDF, DOCX
+• ZIP, RAR, DOCX
 
 🚀 *BOT FEATURES:*
 • Multi-user support
