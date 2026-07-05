@@ -26,7 +26,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 # Global variables for rate limiting
 user_queues = {}
 processing_lock = asyncio.Lock()
-MAX_CONCURRENT_JOBS = 5  # Maximum simultaneous processing jobs
+MAX_CONCURRENT_JOBS = 5
 current_jobs = 0
 
 # Thread pool for CPU-intensive tasks
@@ -65,7 +65,6 @@ def init_db():
                 active_users INTEGER DEFAULT 0
             )
         ''')
-        # Initialize bot stats
         cursor.execute('INSERT OR IGNORE INTO bot_stats (id, total_requests, active_users) VALUES (1, 0, 0)')
         conn.commit()
         conn.close()
@@ -73,10 +72,8 @@ def init_db():
     except Exception as e:
         logger.error(f"❌ Database error: {e}")
 
-# Initialize database
 init_db()
 
-# Statistics functions with connection pooling
 def add_user(user_id, username, first_name, last_name):
     try:
         conn = get_db_connection()
@@ -98,8 +95,6 @@ def log_attempt(user_id, file_type, success):
             INSERT INTO attempts (user_id, file_type, success)
             VALUES (?, ?, ?)
         ''', (user_id, file_type, success))
-        
-        # Update total requests
         cursor.execute('UPDATE bot_stats SET total_requests = total_requests + 1 WHERE id = 1')
         conn.commit()
         conn.close()
@@ -110,51 +105,36 @@ def get_stats():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        
         cursor.execute('SELECT COUNT(*) FROM users')
         total_users = cursor.fetchone()[0]
-        
         cursor.execute('SELECT COUNT(*) FROM attempts WHERE success = 1')
         total_cracked = cursor.fetchone()[0]
-        
         cursor.execute('SELECT COUNT(*) FROM attempts')
         total_attempts = cursor.fetchone()[0]
-        
         cursor.execute('SELECT COUNT(*) FROM attempts WHERE success = 0')
         total_failed = cursor.fetchone()[0]
-        
         cursor.execute('SELECT total_requests FROM bot_stats WHERE id = 1')
         total_requests = cursor.fetchone()[0]
-        
         conn.close()
         return total_users, total_cracked, total_attempts, total_failed, total_requests
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
         return 0, 0, 0, 0, 0
 
-# Rate limiting decorator
 def rate_limit(func):
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         current_time = time.time()
-        
-        # Check if user has made too many requests
         if user_id not in user_queues:
             user_queues[user_id] = []
-        
-        # Remove old requests (last 60 seconds)
         user_queues[user_id] = [t for t in user_queues[user_id] if current_time - t < 60]
-        
-        # Allow maximum 10 requests per minute per user
         if len(user_queues[user_id]) >= 10:
             await update.message.reply_text("🚫 Rate limit exceeded. Please wait 1 minute.")
             return
-        
         user_queues[user_id].append(current_time)
         return await func(update, context)
     return wrapper
 
-# Password cracking functions with threading
 def crack_zip_thread(file_path, wordlist_path, user_id):
     try:
         with pyzipper.AESZipFile(file_path) as zf:
@@ -205,10 +185,9 @@ def crack_docx_thread(file_path, wordlist_path, user_id):
                     file_data = f.read()
                 decrypted = msoffcrypto.OfficeFile(io.BytesIO(file_data))
                 decrypted.load_key(password=password)
-                # If we get here, password is correct
                 log_attempt(user_id, "DOCX", True)
                 return f"🎉 PASSWORD FOUND: `{password}`"
-            except Exception as e:
+            except:
                 continue
         log_attempt(user_id, "DOCX", False)
         return "❌ Password not found in wordlist"
@@ -216,18 +195,18 @@ def crack_docx_thread(file_path, wordlist_path, user_id):
         log_attempt(user_id, "DOCX", False)
         return f"❌ Error: {str(e)}"
 
-# Async function to run cracking in thread pool
+# ✅ FIXED: Python 3.10 compatible event loop
 async def run_cracking_async(file_path, wordlist_path, user_id, file_type):
     global current_jobs
     
     async with processing_lock:
         if current_jobs >= MAX_CONCURRENT_JOBS:
             return "🚫 Server busy. Please try again in a few moments."
-        
         current_jobs += 1
     
     try:
-        loop = asyncio.get_event_loop()
+        # ✅ FIXED: Use get_running_loop() instead of get_event_loop()
+        loop = asyncio.get_running_loop()
         
         if file_type == 'ZIP':
             result = await loop.run_in_executor(thread_pool, crack_zip_thread, file_path, wordlist_path, user_id)
@@ -245,7 +224,6 @@ async def run_cracking_async(file_path, wordlist_path, user_id, file_type):
         async with processing_lock:
             current_jobs -= 1
 
-# Bot handlers with rate limiting
 @rate_limit
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -317,42 +295,28 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    
-    # Rate limiting check
     user_id = user.id
     current_time = time.time()
     if user_id not in user_queues:
         user_queues[user_id] = []
-    
     user_queues[user_id] = [t for t in user_queues[user_id] if current_time - t < 60]
-    
-    if len(user_queues[user_id]) >= 5:  # Max 5 files per minute
+    if len(user_queues[user_id]) >= 5:
         await update.message.reply_text("🚫 Too many requests. Please wait 1 minute.")
         return
-    
     user_queues[user_id].append(current_time)
     
     document = update.message.document
-    
-    supported_types = {
-        '.zip': 'ZIP', 
-        '.rar': 'RAR', 
-        '.docx': 'DOCX'
-    }
-    
+    supported_types = {'.zip': 'ZIP', '.rar': 'RAR', '.docx': 'DOCX'}
     file_extension = os.path.splitext(document.file_name)[1].lower()
     
     if file_extension not in supported_types:
         await update.message.reply_text("❌ Unsupported file type! Use ZIP, RAR, DOCX")
         return
     
-    # Check if server is busy
     async with processing_lock:
         if current_jobs >= MAX_CONCURRENT_JOBS:
             await update.message.reply_text("⏳ Server is busy. Your file is queued. Please wait...")
-            # You can implement proper queue here
     
-    # Download file
     try:
         file = await context.bot.get_file(document.file_id)
         file_path = f"downloads/{user.id}_{int(time.time())}_{document.file_name}"
@@ -362,7 +326,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error downloading file")
         return
     
-    # Check password file
     wordlist_path = "password.txt"
     if not os.path.exists(wordlist_path):
         await update.message.reply_text("❌ password.txt not found on server!")
@@ -372,7 +335,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
     
-    # Send processing message
     processing_msg = await update.message.reply_text(
         f"🔍 *Processing Started*\n"
         f"📁 File: `{document.file_name}`\n"
@@ -382,11 +344,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     
-    # Process file asynchronously
     file_type = supported_types[file_extension]
     result = await run_cracking_async(file_path, wordlist_path, user.id, file_type)
     
-    # Send result
     result_text = f"""
 📁 *File:* `{document.file_name}`
 📊 *Type:* {file_type}
@@ -399,7 +359,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await processing_msg.edit_text(result_text, parse_mode='Markdown')
     
-    # Cleanup
     try:
         os.remove(file_path)
     except:
@@ -417,10 +376,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🚀 *High-speed processing activated*",
             parse_mode='Markdown'
         )
-    
     elif query.data == "status":
         total_users, total_cracked, total_attempts, total_failed, total_requests = get_stats()
-        
         status_text = f"""
 📊 *REAL-TIME STATISTICS*
 
@@ -434,7 +391,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🚀 *HIGH-PERFORMANCE MODE*
         """
         await query.message.reply_text(status_text, parse_mode='Markdown')
-    
     elif query.data == "help":
         help_text = """
 🆘 *HELP - OPTIMIZED FOR HIGH TRAFFIC*
@@ -476,22 +432,16 @@ def main():
         print("🤖 Starting HIGH-PERFORMANCE Password Cracker Bot...")
         print("🔧 Optimizing for multiple users...")
         
-        # Create necessary directories
         os.makedirs("downloads", exist_ok=True)
         
-        # Create password.txt if not exists
         if not os.path.exists("password.txt"):
             with open("password.txt", "w") as f:
                 f.write("password\n123456\nadmin\n1234\n12345\n12345678\nqwerty\npassword1\nletmein\n123456789\n")
             print("✅ Created password.txt file")
         
-        # Bot configuration with optimizations
         application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Add error handler
         application.add_error_handler(error_handler)
         
-        # Add handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("status", status_command))
@@ -504,7 +454,7 @@ def main():
         print("📱 Bot is ready for multiple users!")
         print("⚡ Powered by UZAIR")
         
-        # Start bot with optimizations - FIXED VERSION
+        # ✅ FIXED: Removed drop_pending_updates for Python 3.10 compatibility
         application.run_polling(
             poll_interval=0.5,
             timeout=30
