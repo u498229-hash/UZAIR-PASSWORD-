@@ -1,0 +1,4 @@
+python-telegram-bot==20.7
+pyzipper==0.3.6
+pikepdf==8.13.0
+msoffcrypto-tool==5.2.0
