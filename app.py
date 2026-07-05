@@ -28,6 +28,7 @@ user_queues = {}
 processing_lock = asyncio.Lock()
 MAX_CONCURRENT_JOBS = 5
 current_jobs = 0
+user_wordlists = {}  # Store custom wordlists per user
 
 # Thread pool for CPU-intensive tasks
 thread_pool = ThreadPoolExecutor(max_workers=10)
@@ -195,7 +196,6 @@ def crack_docx_thread(file_path, wordlist_path, user_id):
         log_attempt(user_id, "DOCX", False)
         return f"❌ Error: {str(e)}"
 
-# ✅ FIXED: Use create_task instead of get_event_loop
 async def run_cracking_async(file_path, wordlist_path, user_id, file_type):
     global current_jobs
     
@@ -205,13 +205,14 @@ async def run_cracking_async(file_path, wordlist_path, user_id, file_type):
         current_jobs += 1
     
     try:
-        # ✅ FIXED: Use asyncio.to_thread for Python 3.9+
+        loop = asyncio.get_running_loop()
+        
         if file_type == 'ZIP':
-            result = await asyncio.to_thread(crack_zip_thread, file_path, wordlist_path, user_id)
+            result = await loop.run_in_executor(thread_pool, crack_zip_thread, file_path, wordlist_path, user_id)
         elif file_type == 'RAR':
-            result = await asyncio.to_thread(crack_rar_thread, file_path, wordlist_path, user_id)
+            result = await loop.run_in_executor(thread_pool, crack_rar_thread, file_path, wordlist_path, user_id)
         elif file_type == 'DOCX':
-            result = await asyncio.to_thread(crack_docx_thread, file_path, wordlist_path, user_id)
+            result = await loop.run_in_executor(thread_pool, crack_docx_thread, file_path, wordlist_path, user_id)
         else:
             result = "⚠️ File type supported but cracking not implemented"
         
@@ -235,6 +236,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📁 *SUPPORTED FILES:*
 • ZIP • RAR • DOCX
 
+📝 *CUSTOM WORDLIST:*
+• Upload your own password list (.txt)
+• Bot will use your custom list
+
 🚀 *HIGH-PERFORMANCE BOT*
 • Multi-user support ✅
 • Fast processing ⚡
@@ -246,6 +251,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📤 UPLOAD FILE", callback_data="upload")],
         [InlineKeyboardButton("📊 LIVE STATS", callback_data="status")],
+        [InlineKeyboardButton("📝 UPLOAD WORDLIST", callback_data="wordlist")],
         [InlineKeyboardButton("🆘 HELP", callback_data="help")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -261,6 +267,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • ZIP Archives
 • RAR Archives  
 • DOCX Documents
+
+📝 *CUSTOM WORDLIST:*
+• Send any .txt file with passwords
+• Each password on new line
+• Bot will use your wordlist
 
 🚀 *PERFORMANCE FEATURES:*
 • Multi-threaded processing
@@ -291,10 +302,56 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(status_text, parse_mode='Markdown')
 
+# ✅ NEW: Handle Wordlist Upload
+async def handle_wordlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    document = update.message.document
+    
+    # Check if file is .txt
+    if not document.file_name.endswith('.txt'):
+        await update.message.reply_text("❌ Please upload a .txt file!")
+        return
+    
+    # Check file size (max 5MB)
+    if document.file_size > 5 * 1024 * 1024:
+        await update.message.reply_text("❌ File too large! Max 5MB allowed.")
+        return
+    
+    try:
+        # Download wordlist
+        file = await context.bot.get_file(document.file_id)
+        wordlist_path = f"wordlists/{user.id}_{int(time.time())}.txt"
+        os.makedirs("wordlists", exist_ok=True)
+        await file.download_to_drive(wordlist_path)
+        
+        # Store path in user's session
+        user_wordlists[user.id] = wordlist_path
+        
+        # Count passwords
+        with open(wordlist_path, 'r', errors='ignore') as f:
+            count = sum(1 for line in f if line.strip())
+        
+        await update.message.reply_text(
+            f"✅ *Wordlist Uploaded Successfully!*\n\n"
+            f"📁 File: `{document.file_name}`\n"
+            f"🔢 Total Passwords: `{count}`\n\n"
+            f"Now upload your protected file to crack!",
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error uploading wordlist: {str(e)}")
+
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     current_time = time.time()
+    
+    # Check if it's a wordlist
+    if update.message.document.file_name.endswith('.txt'):
+        await handle_wordlist(update, context)
+        return
+    
     if user_id not in user_queues:
         user_queues[user_id] = []
     user_queues[user_id] = [t for t in user_queues[user_id] if current_time - t < 60]
@@ -324,9 +381,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error downloading file")
         return
     
-    wordlist_path = "password.txt"
+    # ✅ Check if user has custom wordlist
+    if user_id in user_wordlists and os.path.exists(user_wordlists[user_id]):
+        wordlist_path = user_wordlists[user_id]
+        wordlist_msg = "📝 Using your custom wordlist ✅"
+    else:
+        wordlist_path = "password.txt"
+        wordlist_msg = "📝 Using default wordlist"
+    
     if not os.path.exists(wordlist_path):
-        await update.message.reply_text("❌ password.txt not found on server!")
+        await update.message.reply_text("❌ No wordlist found! Please upload a .txt wordlist or contact admin.")
         try:
             os.remove(file_path)
         except:
@@ -337,6 +401,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔍 *Processing Started*\n"
         f"📁 File: `{document.file_name}`\n"
         f"👤 User: {user.first_name}\n"
+        f"{wordlist_msg}\n"
         f"⏳ Please wait...\n"
         f"📊 Queue: {current_jobs}/{MAX_CONCURRENT_JOBS}",
         parse_mode='Markdown'
@@ -349,6 +414,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📁 *File:* `{document.file_name}`
 📊 *Type:* {file_type}
 👤 *User:* {user.first_name}
+{wordlist_msg}
 
 {result}
 
@@ -371,9 +437,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📤 *READY FOR UPLOAD*\n\n"
             "Please upload your protected file now!\n"
             "Supported: ZIP, RAR, DOCX\n\n"
-            "🚀 *High-speed processing activated*",
+            "💡 Tip: Upload a .txt wordlist first for custom passwords!",
             parse_mode='Markdown'
         )
+    
+    elif query.data == "wordlist":
+        await query.message.reply_text(
+            "📝 *UPLOAD WORDLIST*\n\n"
+            "Send me a .txt file with passwords!\n"
+            "📌 Each password on a new line\n"
+            "📌 Max file size: 5MB\n\n"
+            "Example:\n"
+            "`password`\n"
+            "`123456`\n"
+            "`admin`\n\n"
+            "Your custom wordlist will be used for cracking!",
+            parse_mode='Markdown'
+        )
+    
     elif query.data == "status":
         total_users, total_cracked, total_attempts, total_failed, total_requests = get_stats()
         status_text = f"""
@@ -389,12 +470,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🚀 *HIGH-PERFORMANCE MODE*
         """
         await query.message.reply_text(status_text, parse_mode='Markdown')
+    
     elif query.data == "help":
         help_text = """
 🆘 *HELP - OPTIMIZED FOR HIGH TRAFFIC*
 
 📁 *SUPPORTED FILES:*
 • ZIP, RAR, DOCX
+
+📝 *CUSTOM WORDLIST:*
+• Upload any .txt file
+• Bot uses your wordlist
 
 🚀 *BOT FEATURES:*
 • Multi-user support
@@ -411,7 +497,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text and not update.message.text.startswith('/'):
         await update.message.reply_text(
             "🤖 *PASSWORD CRACKER BOT*\n\n"
-            "📤 Upload a file or use buttons below!",
+            "📤 Upload a file or use buttons below!\n\n"
+            "📝 Upload .txt wordlist for custom passwords!",
             parse_mode='Markdown'
         )
 
@@ -425,52 +512,39 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-async def run_bot():
-    """Async function to run the bot"""
-    print("🤖 Starting HIGH-PERFORMANCE Password Cracker Bot...")
-    print("🔧 Optimizing for multiple users...")
-    
-    os.makedirs("downloads", exist_ok=True)
-    
-    if not os.path.exists("password.txt"):
-        with open("password.txt", "w") as f:
-            f.write("password\n123456\nadmin\n1234\n12345\n12345678\nqwerty\npassword1\nletmein\n123456789\n")
-        print("✅ Created password.txt file")
-    
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_error_handler(error_handler)
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    print("✅ HIGH-PERFORMANCE Bot started successfully!")
-    print(f"🚀 Max concurrent jobs: {MAX_CONCURRENT_JOBS}")
-    print("📱 Bot is ready for multiple users!")
-    print("⚡ Powered by UZAIR")
-    
-    # ✅ FIXED: Use run_polling with proper async
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(
-        poll_interval=0.5,
-        timeout=30
-    )
-    
-    # Keep the bot running
-    while True:
-        await asyncio.sleep(1)
-
 def main():
-    """Main entry point"""
     try:
-        # ✅ FIXED: Use asyncio.run() for Python 3.10+
-        asyncio.run(run_bot())
-    except KeyboardInterrupt:
-        print("🛑 Bot stopped by user")
+        print("🤖 Starting HIGH-PERFORMANCE Password Cracker Bot...")
+        print("🔧 Optimizing for multiple users...")
+        
+        os.makedirs("downloads", exist_ok=True)
+        os.makedirs("wordlists", exist_ok=True)
+        
+        if not os.path.exists("password.txt"):
+            with open("password.txt", "w") as f:
+                f.write("password\n123456\nadmin\n1234\n12345\n12345678\nqwerty\npassword1\nletmein\n123456789\n")
+            print("✅ Created password.txt file")
+        
+        application = Application.builder().token(BOT_TOKEN).build()
+        application.add_error_handler(error_handler)
+        
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("status", status_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+        application.add_handler(CallbackQueryHandler(button_handler))
+        
+        print("✅ HIGH-PERFORMANCE Bot started successfully!")
+        print(f"🚀 Max concurrent jobs: {MAX_CONCURRENT_JOBS}")
+        print("📱 Bot is ready for multiple users!")
+        print("⚡ Powered by UZAIR")
+        
+        application.run_polling(
+            poll_interval=0.5,
+            timeout=30
+        )
+        
     except Exception as e:
         print(f"❌ Error: {e}")
         print("🔧 Please check your configuration")
