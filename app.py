@@ -21,7 +21,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Bot Configuration
-import os
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # Global variables for rate limiting
@@ -505,11 +504,10 @@ def main():
         print("📱 Bot is ready for multiple users!")
         print("⚡ Powered by UZAIR")
         
-        # Start bot with optimizations
+        # Start bot with optimizations - FIXED VERSION
         application.run_polling(
-            poll_interval=0.5,  # Faster polling
-            timeout=30,
-            drop_pending_updates=True
+            poll_interval=0.5,
+            timeout=30
         )
         
     except Exception as e:
