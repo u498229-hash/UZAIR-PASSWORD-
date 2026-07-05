@@ -195,7 +195,7 @@ def crack_docx_thread(file_path, wordlist_path, user_id):
         log_attempt(user_id, "DOCX", False)
         return f"❌ Error: {str(e)}"
 
-# ✅ FIXED: Python 3.10 compatible event loop
+# ✅ FIXED: Use create_task instead of get_event_loop
 async def run_cracking_async(file_path, wordlist_path, user_id, file_type):
     global current_jobs
     
@@ -205,15 +205,13 @@ async def run_cracking_async(file_path, wordlist_path, user_id, file_type):
         current_jobs += 1
     
     try:
-        # ✅ FIXED: Use get_running_loop() instead of get_event_loop()
-        loop = asyncio.get_running_loop()
-        
+        # ✅ FIXED: Use asyncio.to_thread for Python 3.9+
         if file_type == 'ZIP':
-            result = await loop.run_in_executor(thread_pool, crack_zip_thread, file_path, wordlist_path, user_id)
+            result = await asyncio.to_thread(crack_zip_thread, file_path, wordlist_path, user_id)
         elif file_type == 'RAR':
-            result = await loop.run_in_executor(thread_pool, crack_rar_thread, file_path, wordlist_path, user_id)
+            result = await asyncio.to_thread(crack_rar_thread, file_path, wordlist_path, user_id)
         elif file_type == 'DOCX':
-            result = await loop.run_in_executor(thread_pool, crack_docx_thread, file_path, wordlist_path, user_id)
+            result = await asyncio.to_thread(crack_docx_thread, file_path, wordlist_path, user_id)
         else:
             result = "⚠️ File type supported but cracking not implemented"
         
@@ -427,39 +425,52 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+async def run_bot():
+    """Async function to run the bot"""
+    print("🤖 Starting HIGH-PERFORMANCE Password Cracker Bot...")
+    print("🔧 Optimizing for multiple users...")
+    
+    os.makedirs("downloads", exist_ok=True)
+    
+    if not os.path.exists("password.txt"):
+        with open("password.txt", "w") as f:
+            f.write("password\n123456\nadmin\n1234\n12345\n12345678\nqwerty\npassword1\nletmein\n123456789\n")
+        print("✅ Created password.txt file")
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_error_handler(error_handler)
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    
+    print("✅ HIGH-PERFORMANCE Bot started successfully!")
+    print(f"🚀 Max concurrent jobs: {MAX_CONCURRENT_JOBS}")
+    print("📱 Bot is ready for multiple users!")
+    print("⚡ Powered by UZAIR")
+    
+    # ✅ FIXED: Use run_polling with proper async
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(
+        poll_interval=0.5,
+        timeout=30
+    )
+    
+    # Keep the bot running
+    while True:
+        await asyncio.sleep(1)
+
 def main():
+    """Main entry point"""
     try:
-        print("🤖 Starting HIGH-PERFORMANCE Password Cracker Bot...")
-        print("🔧 Optimizing for multiple users...")
-        
-        os.makedirs("downloads", exist_ok=True)
-        
-        if not os.path.exists("password.txt"):
-            with open("password.txt", "w") as f:
-                f.write("password\n123456\nadmin\n1234\n12345\n12345678\nqwerty\npassword1\nletmein\n123456789\n")
-            print("✅ Created password.txt file")
-        
-        application = Application.builder().token(BOT_TOKEN).build()
-        application.add_error_handler(error_handler)
-        
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("status", status_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-        application.add_handler(CallbackQueryHandler(button_handler))
-        
-        print("✅ HIGH-PERFORMANCE Bot started successfully!")
-        print(f"🚀 Max concurrent jobs: {MAX_CONCURRENT_JOBS}")
-        print("📱 Bot is ready for multiple users!")
-        print("⚡ Powered by UZAIR")
-        
-        # ✅ FIXED: Removed drop_pending_updates for Python 3.10 compatibility
-        application.run_polling(
-            poll_interval=0.5,
-            timeout=30
-        )
-        
+        # ✅ FIXED: Use asyncio.run() for Python 3.10+
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        print("🛑 Bot stopped by user")
     except Exception as e:
         print(f"❌ Error: {e}")
         print("🔧 Please check your configuration")
