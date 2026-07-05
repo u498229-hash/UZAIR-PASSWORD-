@@ -204,14 +204,13 @@ async def run_cracking_async(file_path, wordlist_path, user_id, file_type):
         current_jobs += 1
     
     try:
-        loop = asyncio.get_running_loop()
-        
+        # ✅ FIX: Use asyncio.to_thread for Python 3.9+
         if file_type == 'ZIP':
-            result = await loop.run_in_executor(thread_pool, crack_zip_thread, file_path, wordlist_path, user_id)
+            result = await asyncio.to_thread(crack_zip_thread, file_path, wordlist_path, user_id)
         elif file_type == 'RAR':
-            result = await loop.run_in_executor(thread_pool, crack_rar_thread, file_path, wordlist_path, user_id)
+            result = await asyncio.to_thread(crack_rar_thread, file_path, wordlist_path, user_id)
         elif file_type == 'DOCX':
-            result = await loop.run_in_executor(thread_pool, crack_docx_thread, file_path, wordlist_path, user_id)
+            result = await asyncio.to_thread(crack_docx_thread, file_path, wordlist_path, user_id)
         else:
             result = "⚠️ File type supported but cracking not implemented"
         
@@ -440,6 +439,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
+# ✅ FIX: Main function with proper async handling
 def main():
     try:
         print("🤖 Starting Bot...")
@@ -452,29 +452,31 @@ def main():
                 f.write("password\n123456\nadmin\n1234\n12345\n")
             print("✅ Created password.txt")
         
-        # ✅ FIX: Better application build
-        application = Application.builder().token(BOT_TOKEN).build()
+        # ✅ FIX: Use asyncio.run() properly
+        async def run_bot():
+            application = Application.builder().token(BOT_TOKEN).build()
+            
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("help", help_command))
+            application.add_handler(CommandHandler("status", status_command))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+            application.add_handler(CallbackQueryHandler(button_handler))
+            application.add_error_handler(error_handler)
+            
+            print("✅ Bot started successfully!")
+            print("⚡ Powered by UZAIR")
+            
+            # ✅ FIX: Initialize and start properly
+            await application.initialize()
+            await application.start()
+            await application.updater.start_polling()
+            
+            # Keep running
+            while True:
+                await asyncio.sleep(1)
         
-        # Add handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("status", status_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-        application.add_handler(CallbackQueryHandler(button_handler))
-        
-        # ✅ FIX: Add error handler properly
-        application.add_error_handler(error_handler)
-        
-        print("✅ Bot started successfully!")
-        print("⚡ Powered by UZAIR")
-        
-        # ✅ FIX: Start polling
-        application.run_polling(
-            poll_interval=1.0,
-            timeout=60,
-            drop_pending_updates=True
-        )
+        asyncio.run(run_bot())
         
     except Exception as e:
         print(f"❌ Error: {e}")
